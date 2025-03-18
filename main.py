@@ -55,21 +55,6 @@ def compute_weights(noisy_img, alpha=0.1, sigma=15.0):
     return weights
 
 
-def proximal_l1(v, threshold):
-    """l1范数的近端算子（软阈值）"""
-    magnitude = np.sqrt(np.sum(v**2, axis=0))
-    # 避免除以零
-    mask = magnitude > threshold
-    
-    result = np.zeros_like(v)
-    if np.any(mask):
-        factor = np.maximum(0, 1 - threshold / magnitude[mask])
-        for i in range(v.shape[0]):
-            result[i][mask] = v[i][mask] * factor
-            
-    return result
-
-
 def generate_noisy_image(img, noise_level=15):
     """给图像添加高斯噪声"""
     sigma = noise_level / 255.0
@@ -79,93 +64,75 @@ def generate_noisy_image(img, noise_level=15):
     return noisy
 
 
-def denoise_apg_edge_preserving(noisy_img, lambda_param=0.03, max_iter=100, tol=1e-4, epsilon=1e-6):
+def denoise_apg_edge_preserving(noisy_img, lambda_param=0.03, max_iter=100, tol=1e-4):
     """
-    使用加速近端梯度法进行边缘保留图像去噪
+    Fixed edge-preserving image denoising using total variation with adaptive weights
     
-    参数:
+    Parameters:
     -----------
     noisy_img : 2D numpy array
-        输入的噪声图像（归一化到 [0, 1]）
+        Input noisy image (normalized to [0, 1])
     lambda_param : float
-        控制去噪强度的正则化参数
+        Regularization parameter controlling denoising strength
     max_iter : int
-        最大迭代次数
+        Maximum number of iterations
     tol : float
-        收敛容差
-    epsilon : float
-        l1范数平滑近似的小常数
+        Convergence tolerance
         
-    返回:
+    Returns:
     --------
     denoised_img : 2D numpy array
-        去噪后的输出图像
+        Denoised output image
     """
-    # 初始化变量
+    # Initialize variables
     x = noisy_img.copy()
     y = x.copy()
     t = 1.0
     prev_x = x.copy()
     
-    # 计算自适应权重
-    weights = compute_weights(noisy_img)
+    # Step size for gradient descent - very important for stability
+    step_size = 0.2
     
-    # 使用FFT实现快速求解线性系统
-    dx_filter = np.array([[0, 0, 0], [0, -1, 1], [0, 0, 0]])
-    dy_filter = np.array([[0, 0, 0], [0, -1, 0], [0, 1, 0]])
-    
-    # 滤波器的FFT，用于高效卷积
-    dx_fft = fft.fft2(dx_filter, shape=noisy_img.shape)
-    dy_fft = fft.fft2(dy_filter, shape=noisy_img.shape)
-    dxT_fft = np.conj(dx_fft)
-    dyT_fft = np.conj(dy_fft)
-    
-    # 预计算线性系统的项
-    weights_term = 1 + lambda_param * weights**2
-    
-    # 主优化循环
+    # Main optimization loop
     for iter_num in range(max_iter):
-        # 保存前一个迭代结果
+        # Save previous iteration result
         prev_x = x.copy()
         
-        # 计算y的梯度
-        y_dx = ndimage.convolve(y, dx_filter, mode='wrap')
-        y_dy = ndimage.convolve(y, dy_filter, mode='wrap')
+        # Compute gradients of y
+        grad_x, grad_y = gradient(y)
         
-        # 计算梯度幅值并归一化
-        grad_mag = np.sqrt(y_dx**2 + y_dy**2 + epsilon**2)
+        # Calculate gradient magnitude for thresholding
+        grad_mag = np.sqrt(grad_x**2 + grad_y**2 + 1e-10)
         
-        # 计算边缘保留项的近端映射
-        # 这是近端算子的向量化版本
-        prox_dx = y_dx * np.maximum(0, 1 - lambda_param / grad_mag)
-        prox_dy = y_dy * np.maximum(0, 1 - lambda_param / grad_mag)
+        # Simple soft thresholding for Total Variation
+        scale = np.maximum(0, 1 - lambda_param / (grad_mag + 1e-10))
+        prox_grad_x = grad_x * scale
+        prox_grad_y = grad_y * scale
         
-        # 计算数据拟合梯度项: y - noisy_img + divergence(prox)
-        div_prox = divergence(prox_dx, prox_dy)
+        # Compute divergence (adjoint of gradient)
+        div_term = divergence(prox_grad_x, prox_grad_y)
         
-        # 计算自适应空间变化数据项
-        data_term = y - noisy_img + lambda_param * weights**2 * (y - noisy_img)
+        # Data fidelity gradient term
+        data_term = y - noisy_img
         
-        # 合并项
-        gradient_term = data_term + div_prox
+        # Compute update step
+        x = y - step_size * (data_term - div_term)
         
-        # 使用FFT更新x以高效求解线性系统
-        x_fft = fft.fft2(noisy_img - gradient_term) / weights_term
-        x = np.real(fft.ifft2(x_fft))
+        # Clip boundary values
+        x = np.clip(x, 0, 1)
         
-        # 加速更新
+        # FISTA acceleration update
         t_new = 0.5 * (1 + np.sqrt(1 + 4 * t**2))
         y = x + ((t - 1) / t_new) * (x - prev_x)
         t = t_new
         
-        # 检查收敛性
-        rel_change = np.linalg.norm(x - prev_x) / np.linalg.norm(x)
+        # Check convergence
+        rel_change = np.linalg.norm(x - prev_x) / (np.linalg.norm(x) + 1e-10)
         if rel_change < tol:
-            print(f"在第 {iter_num+1} 次迭代收敛")
+            print(f"Converged at iteration {iter_num+1}")
             break
             
     return x
-
 
 def evaluate_denoising(original, noisy, denoised):
     """使用PSNR和SSIM指标评估去噪质量"""
@@ -277,44 +244,6 @@ def download_set12(base_dir="./datasets"):
     return image_paths
 
 
-def create_synthetic_test_images(num_images=5, base_dir="./datasets/synthetic"):
-    """创建合成测试图像，包含边缘和纹理"""
-    os.makedirs(base_dir, exist_ok=True)
-    image_paths = []
-    
-    for i in range(num_images):
-        # 创建尺寸为256x256的图像
-        img = np.zeros((256, 256))
-        
-        # 添加不同的测试图案
-        if i == 0:
-            # 创建方块图案
-            img[64:192, 64:192] = 1.0
-        elif i == 1:
-            # 创建梯度图案
-            x, y = np.meshgrid(np.linspace(0, 1, 256), np.linspace(0, 1, 256))
-            img = x
-        elif i == 2:
-            # 创建圆形图案
-            x, y = np.meshgrid(np.linspace(-1, 1, 256), np.linspace(-1, 1, 256))
-            img = (x**2 + y**2 < 0.5**2).astype(float)
-        elif i == 3:
-            # 创建十字图案
-            img[118:138, :] = 1.0
-            img[:, 118:138] = 1.0
-        elif i == 4:
-            # 创建棋盘图案
-            x, y = np.meshgrid(np.arange(256), np.arange(256))
-            img = ((x // 32) % 2 != (y // 32) % 2).astype(float)
-        
-        # 保存图像
-        file_path = os.path.join(base_dir, f"synthetic_{i+1}.png")
-        plt.imsave(file_path, img, cmap='gray')
-        image_paths.append(file_path)
-    
-    return image_paths
-
-
 def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir="./results"):
     """对数据集中的所有图像运行去噪算法"""
     os.makedirs(save_dir, exist_ok=True)
@@ -336,13 +265,15 @@ def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir=".
             # 添加噪声
             noisy_img = generate_noisy_image(img, noise_level)
             
+            # 确定lambda参数，根据噪声级别自适应调整
+            lambda_val = 0.01 * (noise_level / 15)
+            
             # 去噪处理
             start_time = time.time()
             denoised_img = denoise_apg_edge_preserving(
                 noisy_img, 
-                lambda_param=0.03 * (noise_level/15),  # 根据噪声强度调整参数
-                max_iter=100,
-                tol=1e-4
+                lambda_param=lambda_val,
+                max_iter=50
             )
             end_time = time.time()
             
@@ -404,7 +335,10 @@ def compare_with_other_denoisers(img, noise_level=25):
         # 应用不同的去噪方法
         print("应用我们的边缘保留去噪方法...")
         start_time = time.time()
-        our_denoised = denoise_apg_edge_preserving(noisy_img, lambda_param=0.03 * (noise_level/15), max_iter=100)
+        our_denoised = denoise_apg_edge_preserving(
+            noisy_img, 
+            lambda_param=0.01 * (noise_level/15), 
+            max_iter=50)
         our_time = time.time() - start_time
         
         print("应用总变差去噪...")
@@ -491,39 +425,48 @@ def main():
     print("请选择操作模式:")
     print("1. 对单个图像进行去噪演示")
     print("2. 下载Set12数据集并对其进行测试")
-    print("3. 创建合成测试图像并进行测试")
+    print("3. 输入自定义图像路径进行去噪")
     print("4. 比较不同去噪方法的性能")
     
     choice = input("请输入选择 (1-4): ")
     
     if choice == '1':
         # 单图像去噪演示
-        synthetic = np.zeros((256, 256))
+        print("创建测试图像...")
         
         # 创建测试图像（有清晰边缘的图像）
+        img = np.zeros((256, 256))
         x, y = np.meshgrid(np.linspace(-1, 1, 256), np.linspace(-1, 1, 256))
-        # 添加圆形和方块
-        synthetic = (x**2 + y**2 < 0.5**2).astype(float)
-        synthetic[x > 0.1] += 0.5
-        synthetic = np.clip(synthetic, 0, 1)
+        
+        # 添加圆形
+        img += 0.7 * (x**2 + y**2 < 0.5**2).astype(float)
+        
+        # 添加方块
+        img[(x > -0.2) & (x < 0.2) & (y > -0.2) & (y < 0.2)] = 0.9
+        
+        # 添加线条
+        img[120:130, :] += 0.5
+        img[:, 180:190] += 0.5
+        
+        img = np.clip(img, 0, 1)
         
         # 添加噪声
-        noise_level = 25  # 可以调整 (0-50)
-        noisy_img = generate_noisy_image(synthetic, noise_level)
+        noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
+        noisy_img = generate_noisy_image(img, noise_level)
         
         # 去噪处理
-        lambda_param = 0.03 * (noise_level/15)  # 根据噪声级别调整参数
+        lambda_param = 0.01 * (noise_level/15)  # 根据噪声级别自适应调整
         print(f"正在对图像进行去噪处理 (噪声级别: {noise_level}, lambda: {lambda_param:.4f})...")
         denoised_img = denoise_apg_edge_preserving(
             noisy_img, 
             lambda_param=lambda_param,
-            max_iter=100
+            max_iter=50
         )
         
         # 显示结果
-        evaluate_denoising(synthetic, noisy_img, denoised_img)
-        display_results(synthetic, noisy_img, denoised_img, "边缘保留去噪演示")
-        compare_edge_preservation(synthetic, noisy_img, denoised_img)
+        evaluate_denoising(img, noisy_img, denoised_img)
+        display_results(img, noisy_img, denoised_img, "边缘保留去噪演示")
+        compare_edge_preservation(img, noisy_img, denoised_img)
         
     elif choice == '2':
         # 下载并测试Set12数据集
@@ -540,15 +483,32 @@ def main():
             print("无法下载数据集。请检查您的互联网连接，或尝试其他选项。")
         
     elif choice == '3':
-        # 创建并测试合成图像
-        print("创建合成测试图像...")
-        image_paths = create_synthetic_test_images(5)
+        # 使用自定义图像
+        image_path = input("请输入图像文件路径: ")
         
-        print(f"创建了 {len(image_paths)} 张合成图像")
-        noise_levels = [15, 25, 35]
-        print(f"测试噪声级别: {noise_levels}")
-        
-        results = run_denoising_on_dataset(image_paths, noise_levels)
+        try:
+            img = img_as_float(io.imread(image_path, as_gray=True))
+            
+            # 添加噪声
+            noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
+            noisy_img = generate_noisy_image(img, noise_level)
+            
+            # 去噪处理
+            lambda_param = 0.01 * (noise_level/15)  # 根据噪声级别自适应调整
+            print(f"正在对图像进行去噪处理 (噪声级别: {noise_level}, lambda: {lambda_param:.4f})...")
+            denoised_img = denoise_apg_edge_preserving(
+                noisy_img, 
+                lambda_param=lambda_param,
+                max_iter=50
+            )
+            
+            # 显示结果
+            evaluate_denoising(img, noisy_img, denoised_img)
+            display_results(img, noisy_img, denoised_img, "自定义图像去噪结果")
+            compare_edge_preservation(img, noisy_img, denoised_img)
+            
+        except Exception as e:
+            print(f"错误: 无法读取或处理图像。详细信息: {e}")
         
     elif choice == '4':
         # 比较不同去噪方法
@@ -561,6 +521,9 @@ def main():
         # 添加圆形
         img += 0.7 * (x**2 + y**2 < 0.5**2).astype(float)
         
+        # 添加方块
+        img[(x > 0.1) & (x < 0.6) & (y > -0.7) & (y < -0.2)] = 0.9
+        
         # 添加线条
         img[100:110, :] += 0.8
         img[:, 180:190] += 0.8
@@ -570,7 +533,7 @@ def main():
         
         img = np.clip(img, 0, 1)
         
-        noise_level = 25
+        noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
         metrics = compare_with_other_denoisers(img, noise_level)
         
     else:
