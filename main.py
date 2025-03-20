@@ -2,9 +2,12 @@ import numpy as np
 import scipy.fftpack as fft
 from scipy import ndimage
 import matplotlib.pyplot as plt
-from skimage import io, color, img_as_float, exposure, util
+from skimage import io, color, exposure, util
+from skimage.util import  img_as_float
 from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
+from skimage.filters import unsharp_mask  # 后处理锐化
+from skimage.restoration import denoise_wavelet  # 混合去噪
 import os
 import urllib.request
 import glob
@@ -40,19 +43,22 @@ def divergence(grad_x, grad_y):
     return div
 
 
-def compute_weights(noisy_img, alpha=0.1, sigma=15.0):
-    """计算基于局部边缘信息的自适应权重"""
-    # 从噪声图像估计梯度
-    grad_x, grad_y = gradient(noisy_img)
-    
-    # 计算梯度幅值
-    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-    
-    # 计算权重：边缘区域（大梯度）的权重较小
-    # 使用梯度幅值的高斯型函数
-    weights = np.exp(-alpha * (grad_mag**2) / (sigma**2))
-    
-    return weights
+def compute_weights(img, alpha=0.1, sigma=15.0):
+    """计算基于结构张量的改进权重"""
+    grad_x, grad_y = gradient(img)
+
+    # 计算结构张量（加入方向信息）
+    structure_tensor = grad_x ** 2 + grad_y ** 2 + 1e-10
+    orientation = np.arctan2(grad_y, grad_x)
+
+    # 方向一致性增强（抑制孤立噪声点）
+    window_size = 3
+    avg_orientation = ndimage.uniform_filter(orientation, size=window_size)
+    consistency = np.exp(-np.abs(orientation - avg_orientation))
+
+    # 改进的权重公式
+    weights = np.exp(-alpha * structure_tensor / (sigma ** 2)) * consistency
+    return np.clip(weights, 0.1, 1.0)  # 限制权重范围
 
 
 def generate_noisy_image(img, noise_level=15):
@@ -64,75 +70,57 @@ def generate_noisy_image(img, noise_level=15):
     return noisy
 
 
+# 修改去噪函数（动态参数+后处理）
 def denoise_apg_edge_preserving(noisy_img, lambda_param=0.03, max_iter=100, tol=1e-4):
-    """
-    Fixed edge-preserving image denoising using total variation with adaptive weights
-    
-    Parameters:
-    -----------
-    noisy_img : 2D numpy array
-        Input noisy image (normalized to [0, 1])
-    lambda_param : float
-        Regularization parameter controlling denoising strength
-    max_iter : int
-        Maximum number of iterations
-    tol : float
-        Convergence tolerance
-        
-    Returns:
-    --------
-    denoised_img : 2D numpy array
-        Denoised output image
-    """
-    # Initialize variables
+    # 初始化时加入小波预去噪（可选）
+    # pre_denoised = denoise_wavelet(noisy_img, mode='soft', rescale_sigma=True)
+    # y = pre_denoised.copy()
+
     x = noisy_img.copy()
     y = x.copy()
     t = 1.0
     prev_x = x.copy()
-    
-    # Step size for gradient descent - very important for stability
-    step_size = 0.2
-    
-    # Main optimization loop
+
+    # 动态步长调整参数
+    step_size_init = 0.25
+    step_size = step_size_init
+    step_decay = 0.98
+
     for iter_num in range(max_iter):
-        # Save previous iteration result
         prev_x = x.copy()
-        
-        # Compute gradients of y
+
         grad_x, grad_y = gradient(y)
-        
-        # Calculate gradient magnitude for thresholding
-        grad_mag = np.sqrt(grad_x**2 + grad_y**2 + 1e-10)
-        
-        # Simple soft thresholding for Total Variation
-        scale = np.maximum(0, 1 - lambda_param / (grad_mag + 1e-10))
+        grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-10)
+
+        # 动态lambda调整（基于当前梯度分布）
+        grad_std = np.std(grad_mag)
+        dynamic_lambda = lambda_param * (1 + 0.5 * (grad_std / 0.1) ** 2)  # 噪声越大，正则越强
+        scale = np.maximum(0, 1 - dynamic_lambda / (grad_mag + 1e-10))
+
         prox_grad_x = grad_x * scale
         prox_grad_y = grad_y * scale
-        
-        # Compute divergence (adjoint of gradient)
+
         div_term = divergence(prox_grad_x, prox_grad_y)
-        
-        # Data fidelity gradient term
         data_term = y - noisy_img
-        
-        # Compute update step
+
+        # 带动量项的更新
         x = y - step_size * (data_term - div_term)
-        
-        # Clip boundary values
         x = np.clip(x, 0, 1)
-        
-        # FISTA acceleration update
-        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t**2))
+
+        # 步长衰减
+        step_size *= step_decay
+
+        # FISTA加速
+        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t ** 2))
         y = x + ((t - 1) / t_new) * (x - prev_x)
         t = t_new
-        
-        # Check convergence
-        rel_change = np.linalg.norm(x - prev_x) / (np.linalg.norm(x) + 1e-10)
-        if rel_change < tol:
-            print(f"Converged at iteration {iter_num+1}")
+
+        if np.linalg.norm(x - prev_x) / np.linalg.norm(x) < tol:
             break
-            
-    return x
+
+    # 后处理锐化（边缘增强）
+    denoised_sharp = unsharp_mask(x, radius=1.2, amount=0.4)
+    return np.clip(denoised_sharp, 0, 1)
 
 def evaluate_denoising(original, noisy, denoised):
     """使用PSNR和SSIM指标评估去噪质量"""
