@@ -10,6 +10,8 @@ import urllib.request
 import glob
 from tqdm import tqdm
 import time
+from skimage.metrics import mean_squared_error as mse
+
 
 
 def gradient(img):
@@ -40,19 +42,26 @@ def divergence(grad_x, grad_y):
     return div
 
 
-def compute_weights(noisy_img, alpha=0.1, sigma=15.0):
-    """计算基于局部边缘信息的自适应权重"""
-    # 从噪声图像估计梯度
+def compute_weights(noisy_img, alpha=0.1, sigma=15.0, patch_size=3):
+    """结合局部梯度与非局部相似性的权重"""
+    # 原梯度计算
     grad_x, grad_y = gradient(noisy_img)
-    
-    # 计算梯度幅值
-    grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-    
-    # 计算权重：边缘区域（大梯度）的权重较小
-    # 使用梯度幅值的高斯型函数
-    weights = np.exp(-alpha * (grad_mag**2) / (sigma**2))
-    
-    return weights
+    grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2)
+
+    # 非局部相似性权重
+    pad_width = patch_size // 2
+    padded_img = np.pad(noisy_img, pad_width, mode='reflect')
+    nl_weights = np.zeros_like(noisy_img)
+
+    for i in range(noisy_img.shape[0]):
+        for j in range(noisy_img.shape[1]):
+            patch = padded_img[i:i + patch_size, j:j + patch_size]
+            distances = ndimage.gaussian_filter((padded_img - patch) ** 2, sigma=1.0)
+            nl_weights[i, j] = np.exp(-np.mean(distances) / (sigma ** 2))
+
+    # 组合权重
+    total_weights = 0.7 * np.exp(-alpha * (grad_mag ** 2) / (sigma ** 2)) + 0.3 * nl_weights
+    return total_weights
 
 
 def generate_noisy_image(img, noise_level=15):
@@ -65,89 +74,123 @@ def generate_noisy_image(img, noise_level=15):
 
 
 def denoise_apg_edge_preserving(noisy_img, lambda_param=0.03, max_iter=100, tol=1e-4):
-    """
-    Fixed edge-preserving image denoising using total variation with adaptive weights
-    
-    Parameters:
-    -----------
-    noisy_img : 2D numpy array
-        Input noisy image (normalized to [0, 1])
-    lambda_param : float
-        Regularization parameter controlling denoising strength
-    max_iter : int
-        Maximum number of iterations
-    tol : float
-        Convergence tolerance
-        
-    Returns:
-    --------
-    denoised_img : 2D numpy array
-        Denoised output image
-    """
-    # Initialize variables
+    # 初始化变量
     x = noisy_img.copy()
     y = x.copy()
     t = 1.0
     prev_x = x.copy()
-    
-    # Step size for gradient descent - very important for stability
-    step_size = 0.2
-    
-    # Main optimization loop
+    prev_grad = None  # 新增：存储前一次梯度
+    step_size = 0.2  # 初始步长（后续会动态更新）
+
+    # 新增：Barzilai-Borwein步长计算函数
+    def compute_bb_step(x_prev, x_current, grad_prev, grad_current):
+        s = x_current - x_prev
+        y_grad = grad_current - grad_prev
+        # 两种BB步长计算方式，选择更稳定的版本
+        numerator = np.sum(s * s)
+        denominator = np.sum(s * y_grad)
+        if denominator == 0:
+            return step_size  # 避免除零
+        return np.abs(numerator / denominator)
+
+    # 主优化循环
     for iter_num in range(max_iter):
-        # Save previous iteration result
         prev_x = x.copy()
-        
-        # Compute gradients of y
+
+        # 计算当前y的梯度
         grad_x, grad_y = gradient(y)
-        
-        # Calculate gradient magnitude for thresholding
-        grad_mag = np.sqrt(grad_x**2 + grad_y**2 + 1e-10)
-        
-        # Simple soft thresholding for Total Variation
+        grad_mag = np.sqrt(grad_x ** 2 + grad_y ** 2 + 1e-10)
+
+        # 软阈值处理（Total Variation）
         scale = np.maximum(0, 1 - lambda_param / (grad_mag + 1e-10))
         prox_grad_x = grad_x * scale
         prox_grad_y = grad_y * scale
-        
-        # Compute divergence (adjoint of gradient)
+
+        # 计算散度项
         div_term = divergence(prox_grad_x, prox_grad_y)
-        
-        # Data fidelity gradient term
+
+        # 数据保真项梯度
         data_term = y - noisy_img
-        
-        # Compute update step
+
+        # 动态步长调整（从第二次迭代开始）
+        if iter_num > 0:
+            current_grad = data_term - div_term  # 当前梯度方向
+            step_size = compute_bb_step(prev_x, x, prev_grad, current_grad)
+            step_size = np.clip(step_size, 1e-3, 0.5)  # 限制步长范围
+        prev_grad = data_term - div_term  # 保存当前梯度用于下次计算
+
+        # 更新x
         x = y - step_size * (data_term - div_term)
-        
-        # Clip boundary values
-        x = np.clip(x, 0, 1)
-        
-        # FISTA acceleration update
-        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t**2))
+        x = np.clip(x, 0, 1)  # 像素值裁剪
+
+        # FISTA加速
+        t_new = 0.5 * (1 + np.sqrt(1 + 4 * t ** 2))
         y = x + ((t - 1) / t_new) * (x - prev_x)
         t = t_new
-        
-        # Check convergence
+
+        # 收敛性检查
         rel_change = np.linalg.norm(x - prev_x) / (np.linalg.norm(x) + 1e-10)
         if rel_change < tol:
-            print(f"Converged at iteration {iter_num+1}")
+            print(f"Converged at iteration {iter_num + 1}")
             break
-            
+
+    # 在返回前添加锐化
+    denoised_img = x.copy()
+    denoised_img = np.clip(denoised_img + 0.5 * (denoised_img - ndimage.gaussian_filter(denoised_img, sigma=1)), 0,
+                               1)
+
     return x
 
+
 def evaluate_denoising(original, noisy, denoised):
-    """使用PSNR和SSIM指标评估去噪质量"""
+    """评估去噪质量，新增多种量化指标"""
+    # 原有PSNR和SSIM
     psnr_noisy = psnr(original, noisy)
     psnr_denoised = psnr(original, denoised)
-    
     ssim_noisy = ssim(original, noisy, data_range=1.0)
     ssim_denoised = ssim(original, denoised, data_range=1.0)
-    
+
+    # 新增指标 --------------------------------------------------
+    # 1. 均方误差 (MSE)
+    mse_noisy = np.mean((original - noisy) ** 2)
+    mse_denoised = np.mean((original - denoised) ** 2)
+
+    # 2. 多尺度SSIM (需安装 pip install ms-ssim)
+    try:
+        from ms_ssim import MultiScaleSSIM
+        ms_ssim_noisy = MultiScaleSSIM(original, noisy)
+        ms_ssim_denoised = MultiScaleSSIM(original, denoised)
+    except ImportError:
+        ms_ssim_noisy = ms_ssim_denoised = None
+
+    # 3. 边缘保留指数 (EPI)
+    def edge_preservation_index(orig, denoised):
+        grad_orig = np.sqrt(gradient(orig)[0] ** 2 + gradient(orig)[1] ** 2)
+        grad_denoised = np.sqrt(gradient(denoised)[0] ** 2 + gradient(denoised)[1] ** 2)
+        return np.corrcoef(grad_orig.flatten(), grad_denoised.flatten())[0, 1]
+
+    epi = edge_preservation_index(original, denoised)
+
+    # 4. 噪声减少率 (NRR)
+    nrr = 1 - (np.std(denoised - original) / np.std(noisy - original))
+
+    # 输出结果
+    print("\n========== 量化指标 ==========")
     print(f"PSNR - 有噪声: {psnr_noisy:.2f} dB, 去噪后: {psnr_denoised:.2f} dB")
     print(f"SSIM - 有噪声: {ssim_noisy:.4f}, 去噪后: {ssim_denoised:.4f}")
-    
+    print(f"MSE  - 有噪声: {mse_noisy:.4f}, 去噪后: {mse_denoised:.4f}")
+    if ms_ssim_noisy is not None:
+        print(f"MS-SSIM - 有噪声: {ms_ssim_noisy:.4f}, 去噪后: {ms_ssim_denoised:.4f}")
+    print(f"边缘保留指数 (EPI): {epi:.4f}")
+    print(f"噪声减少率 (NRR): {nrr:.4f}")
+
     return {
         'psnr_improvement': psnr_denoised - psnr_noisy,
-        'ssim_improvement': ssim_denoised - ssim_noisy
+        'ssim_improvement': ssim_denoised - ssim_noisy,
+        'mse_improvement': mse_noisy - mse_denoised,
+        'ms_ssim': ms_ssim_denoised if ms_ssim_denoised else None,
+        'epi': epi,
+        'nrr': nrr
     }
 
 
@@ -247,80 +290,89 @@ def download_set12(base_dir="./datasets"):
 def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir="./results"):
     """对数据集中的所有图像运行去噪算法"""
     os.makedirs(save_dir, exist_ok=True)
-    
-    results = {noise_level: {'psnr': [], 'ssim': [], 'time': []} for noise_level in noise_levels}
-    
+
+    results = {noise_level: {'psnr': [], 'ssim': [], 'mse': [], 'isnr': [], 'time': []}
+                for noise_level in noise_levels}
+
     # 对每个噪声级别进行处理
     for noise_level in noise_levels:
         print(f"\n处理噪声级别: {noise_level}")
         noise_dir = os.path.join(save_dir, f"noise_{noise_level}")
         os.makedirs(noise_dir, exist_ok=True)
-        
+
         # 处理每个图像
         for img_path in tqdm(image_paths, desc="处理图像"):
             # 读取图像
             img_name = os.path.basename(img_path)
             img = img_as_float(io.imread(img_path, as_gray=True))
-            
+
             # 添加噪声
             noisy_img = generate_noisy_image(img, noise_level)
-            
+
             # 确定lambda参数，根据噪声级别自适应调整
             lambda_val = 0.01 * (noise_level / 15)
-            
+
             # 去噪处理
             start_time = time.time()
             denoised_img = denoise_apg_edge_preserving(
-                noisy_img, 
+                noisy_img,
                 lambda_param=lambda_val,
                 max_iter=50
             )
             end_time = time.time()
-            
+
             # 计算指标
             psnr_val = psnr(img, denoised_img)
             ssim_val = ssim(img, denoised_img, data_range=1.0)
+            mse_val = mse(img, denoised_img)
+            isnr_val = 10 * np.log10(mse(img, noisy_img) / mse_val)  # ISNR计算
             elapsed_time = end_time - start_time
-            
+
             # 保存结果
             results[noise_level]['psnr'].append(psnr_val)
             results[noise_level]['ssim'].append(ssim_val)
+            results[noise_level]['mse'].append(mse_val)
+            results[noise_level]['isnr'].append(isnr_val)
             results[noise_level]['time'].append(elapsed_time)
-            
+
             # 保存图像
             plt.figure(figsize=(15, 5))
-            
+
             plt.subplot(1, 3, 1)
             plt.imshow(img, cmap='gray')
             plt.title('原始图像')
             plt.axis('off')
-            
+
             plt.subplot(1, 3, 2)
             plt.imshow(noisy_img, cmap='gray')
             plt.title(f'噪声图像 (噪声: {noise_level})')
             plt.axis('off')
-            
+
             plt.subplot(1, 3, 3)
             plt.imshow(denoised_img, cmap='gray')
             plt.title(f'去噪图像 (PSNR: {psnr_val:.2f}dB)')
             plt.axis('off')
-            
+
             plt.tight_layout()
             plt.savefig(os.path.join(noise_dir, f"result_{img_name}"))
             plt.close()
-    
+
     # 打印平均结果
     print("\n========== 结果摘要 ==========")
     for noise_level in noise_levels:
         avg_psnr = np.mean(results[noise_level]['psnr'])
         avg_ssim = np.mean(results[noise_level]['ssim'])
+        avg_mse = np.mean(results[noise_level]['mse'])
+        avg_isnr = np.mean(results[noise_level]['isnr'])
         avg_time = np.mean(results[noise_level]['time'])
-        
+
         print(f"噪声级别: {noise_level}")
         print(f"  平均 PSNR: {avg_psnr:.2f} dB")
         print(f"  平均 SSIM: {avg_ssim:.4f}")
+        print(f"  平均 MSE: {avg_mse:.4f}")
+        print(f"  平均 ISNR: {avg_isnr:.2f} dB")
         print(f"  平均处理时间: {avg_time:.2f} 秒")
-    
+
     return results
 
 
