@@ -175,14 +175,14 @@ def evaluate_denoising(original, noisy, denoised):
     nrr = 1 - (np.std(denoised - original) / np.std(noisy - original))
 
     # 输出结果
-    print("\n========== 量化指标 ==========")
-    print(f"PSNR - 有噪声: {psnr_noisy:.2f} dB, 去噪后: {psnr_denoised:.2f} dB")
-    print(f"SSIM - 有噪声: {ssim_noisy:.4f}, 去噪后: {ssim_denoised:.4f}")
-    print(f"MSE  - 有噪声: {mse_noisy:.4f}, 去噪后: {mse_denoised:.4f}")
+    print("\n========== Quantitative Metrics ==========")
+    print(f"PSNR - Noisy: {psnr_noisy:.2f} dB, Denoised: {psnr_denoised:.2f} dB")
+    print(f"SSIM - Noisy: {ssim_noisy:.4f}, Denoised: {ssim_denoised:.4f}")
+    print(f"MSE - Noisy: {mse_noisy:.4f}, Denoised: {mse_denoised:.4f}")
     if ms_ssim_noisy is not None:
-        print(f"MS-SSIM - 有噪声: {ms_ssim_noisy:.4f}, 去噪后: {ms_ssim_denoised:.4f}")
-    print(f"边缘保留指数 (EPI): {epi:.4f}")
-    print(f"噪声减少率 (NRR): {nrr:.4f}")
+        print(f"MS-SSIM - Noisy: {ms_ssim_noisy:.4f}, Denoised: {ms_ssim_denoised:.4f}")
+    print(f"Edge Preservation Index (EPI): {epi:.4f}")
+    print(f"Noise Reduction Rate (NRR): {nrr:.4f}")
 
     return {
         'psnr_improvement': psnr_denoised - psnr_noisy,
@@ -194,22 +194,23 @@ def evaluate_denoising(original, noisy, denoised):
     }
 
 
-def display_results(original, noisy, denoised, title="边缘保留去噪结果"):
-    """并排显示原始、有噪声和去噪后的图像"""
+def display_results(original, noisy, denoised, title="Edge-Preserving Denoising Results"):
+    """Display the original, noisy, and denoised images side by side"""
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
+
+
     axes[0].imshow(original, cmap='gray')
-    axes[0].set_title('原始图像')
+    axes[0].set_title('Original Image')
     axes[0].axis('off')
-    
+
     axes[1].imshow(noisy, cmap='gray')
-    axes[1].set_title('有噪声图像')
+    axes[1].set_title('Noisy Image')
     axes[1].axis('off')
-    
+
     axes[2].imshow(denoised, cmap='gray')
-    axes[2].set_title('去噪后图像')
+    axes[2].set_title('Denoised Image')
     axes[2].axis('off')
-    
+
     plt.suptitle(title)
     plt.tight_layout()
     plt.savefig(f"{title.replace(' ', '_')}.png")
@@ -223,26 +224,27 @@ def edge_highlight(img):
     return exposure.rescale_intensity(edges)
 
 
-def compare_edge_preservation(original, noisy, denoised, title="边缘保留对比"):
-    """比较原始、有噪声和去噪后图像的边缘保留情况"""
+def compare_edge_preservation(original, noisy, denoised, title="Edge Preservation Comparison"):
+    """Compare the edge preservation of the original, noisy, and denoised images"""
     original_edges = edge_highlight(original)
     noisy_edges = edge_highlight(noisy)
     denoised_edges = edge_highlight(denoised)
+
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
+
     axes[0].imshow(original_edges, cmap='viridis')
-    axes[0].set_title('原始图像边缘')
+    axes[0].set_title('Original Image Edges')
     axes[0].axis('off')
-    
+
     axes[1].imshow(noisy_edges, cmap='viridis')
-    axes[1].set_title('有噪声图像边缘')
+    axes[1].set_title('Noisy Image Edges')
     axes[1].axis('off')
-    
+
     axes[2].imshow(denoised_edges, cmap='viridis')
-    axes[2].set_title('去噪后图像边缘')
+    axes[2].set_title('Denoised Image Edges')
     axes[2].axis('off')
-    
+
     plt.suptitle(title)
     plt.tight_layout()
     plt.savefig(f"{title.replace(' ', '_')}.png")
@@ -273,16 +275,17 @@ def download_set12(base_dir="./datasets"):
     
     for i, url in enumerate(set12_urls):
         file_path = os.path.join(dataset_dir, f"{i+1:02d}.png")
-        
+
         if not os.path.exists(file_path):
-            print(f"下载Set12图像 {i+1}...")
+            print(f"Downloading Set12 image {i + 1}...")
             try:
                 urllib.request.urlretrieve(url, file_path)
             except:
-                print(f"警告: 无法下载图像 {i+1}，请检查网络连接或URL是否有效")
+                print(
+                    f"Warning: Unable to download image {i + 1}. Please check your network connection or verify the URL.")
         else:
-            print(f"Set12图像 {i+1} 已存在")
-    
+            print(f"Set12 image {i + 1} already exists.")
+
     image_paths = glob.glob(os.path.join(dataset_dir, "*.png"))
     return image_paths
 
@@ -296,13 +299,13 @@ def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir=".
 
     # 对每个噪声级别进行处理
     for noise_level in noise_levels:
-        print(f"\n处理噪声级别: {noise_level}")
+        print(f"\nProcessing noise level: {noise_level}")
         noise_dir = os.path.join(save_dir, f"noise_{noise_level}")
         os.makedirs(noise_dir, exist_ok=True)
 
-        # 处理每个图像
-        for img_path in tqdm(image_paths, desc="处理图像"):
-            # 读取图像
+        # Process each image
+        for img_path in tqdm(image_paths, desc="Processing Images"):
+            # Read image
             img_name = os.path.basename(img_path)
             img = img_as_float(io.imread(img_path, as_gray=True))
 
@@ -340,17 +343,17 @@ def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir=".
 
             plt.subplot(1, 3, 1)
             plt.imshow(img, cmap='gray')
-            plt.title('原始图像')
+            plt.title('Original Image')
             plt.axis('off')
 
             plt.subplot(1, 3, 2)
             plt.imshow(noisy_img, cmap='gray')
-            plt.title(f'噪声图像 (噪声: {noise_level})')
+            plt.title(f'Noisy Image (Noise: {noise_level})')
             plt.axis('off')
 
             plt.subplot(1, 3, 3)
             plt.imshow(denoised_img, cmap='gray')
-            plt.title(f'去噪图像 (PSNR: {psnr_val:.2f}dB)')
+            plt.title(f'Denoised Image (PSNR: {psnr_val:.2f} dB)')
             plt.axis('off')
 
             plt.tight_layout()
@@ -366,12 +369,12 @@ def run_denoising_on_dataset(image_paths, noise_levels=[15, 25, 50], save_dir=".
         avg_isnr = np.mean(results[noise_level]['isnr'])
         avg_time = np.mean(results[noise_level]['time'])
 
-        print(f"噪声级别: {noise_level}")
-        print(f"  平均 PSNR: {avg_psnr:.2f} dB")
-        print(f"  平均 SSIM: {avg_ssim:.4f}")
-        print(f"  平均 MSE: {avg_mse:.4f}")
-        print(f"  平均 ISNR: {avg_isnr:.2f} dB")
-        print(f"  平均处理时间: {avg_time:.2f} 秒")
+        print(f"Noise Level: {noise_level}")
+        print(f"  Average PSNR: {avg_psnr:.2f} dB")
+        print(f"  Average SSIM: {avg_ssim:.4f}")
+        print(f"  Average MSE: {avg_mse:.4f}")
+        print(f"  Average ISNR: {avg_isnr:.2f} dB")
+        print(f"  Average Processing Time: {avg_time:.2f} seconds")
 
     return results
 
@@ -385,50 +388,51 @@ def compare_with_other_denoisers(img, noise_level=25):
         noisy_img = generate_noisy_image(img, noise_level)
         
         # 应用不同的去噪方法
-        print("应用我们的边缘保留去噪方法...")
+        print("Applying our edge-preserving denoising method...")
         start_time = time.time()
         our_denoised = denoise_apg_edge_preserving(
-            noisy_img, 
-            lambda_param=0.01 * (noise_level/15), 
+            noisy_img,
+            lambda_param=0.01 * (noise_level / 15),
             max_iter=50)
         our_time = time.time() - start_time
-        
-        print("应用总变差去噪...")
+
+        print("Applying Total Variation denoising...")
         start_time = time.time()
         tv_denoised = denoise_tv_bregman(noisy_img, weight=0.1)
         tv_time = time.time() - start_time
-        
-        print("应用双边滤波去噪...")
+
+        print("Applying Bilateral Filter denoising...")
         start_time = time.time()
         bilateral_denoised = denoise_bilateral(noisy_img, sigma_color=0.1, sigma_spatial=1)
         bilateral_time = time.time() - start_time
-        
-        print("应用小波去噪...")
+
+        print("Applying Wavelet denoising...")
         start_time = time.time()
         wavelet_denoised = denoise_wavelet(noisy_img, channel_axis=None)
         wavelet_time = time.time() - start_time
-        
-        # 计算PSNR和SSIM
+
+        # Calculate PSNR and SSIM
         metrics = {
-            "有噪声图像": (psnr(img, noisy_img), ssim(img, noisy_img, data_range=1.0), 0),
-            "我们的方法": (psnr(img, our_denoised), ssim(img, our_denoised, data_range=1.0), our_time),
-            "总变差": (psnr(img, tv_denoised), ssim(img, tv_denoised, data_range=1.0), tv_time),
-            "双边滤波": (psnr(img, bilateral_denoised), ssim(img, bilateral_denoised, data_range=1.0), bilateral_time),
-            "小波": (psnr(img, wavelet_denoised), ssim(img, wavelet_denoised, data_range=1.0), wavelet_time)
+            "Noisy Image": (psnr(img, noisy_img), ssim(img, noisy_img, data_range=1.0), 0),
+            "Our Method": (psnr(img, our_denoised), ssim(img, our_denoised, data_range=1.0), our_time),
+            "Total Variation": (psnr(img, tv_denoised), ssim(img, tv_denoised, data_range=1.0), tv_time),
+            "Bilateral Filter": (
+            psnr(img, bilateral_denoised), ssim(img, bilateral_denoised, data_range=1.0), bilateral_time),
+            "Wavelet": (psnr(img, wavelet_denoised), ssim(img, wavelet_denoised, data_range=1.0), wavelet_time)
         }
-        
-        # 显示结果
+
+        # Display Results
         plt.figure(figsize=(20, 10))
         images = [img, noisy_img, our_denoised, tv_denoised, bilateral_denoised, wavelet_denoised]
         titles = list(metrics.keys())
-        titles.insert(0, "原始图像")
-        
+        titles.insert(0, "Original Image")
+
         for i, (image, title) in enumerate(zip(images, titles)):
             plt.subplot(2, 3, i+1)
             plt.imshow(image, cmap='gray')
             if i > 0:  # 跳过原始图像
                 psnr_val, ssim_val, t = metrics[title]
-                plt.title(f"{title}\nPSNR: {psnr_val:.2f}dB, SSIM: {ssim_val:.4f}\n时间: {t:.2f}s")
+                plt.title(f"{title}\nPSNR: {psnr_val:.2f}dB, SSIM: {ssim_val:.4f}\ntime: {t:.2f}s")
             else:
                 plt.title(title)
             plt.axis('off')
@@ -444,7 +448,7 @@ def compare_with_other_denoisers(img, noise_level=25):
         for i, (image, title) in enumerate(zip(edge_images, titles)):
             plt.subplot(2, 3, i+1)
             plt.imshow(image, cmap='viridis')
-            plt.title(f"{title} - 边缘")
+            plt.title(f"{title} - edge")
             plt.axis('off')
         
         plt.tight_layout()
@@ -459,9 +463,10 @@ def compare_with_other_denoisers(img, noise_level=25):
             print(f"{method:<15} {psnr_val:<12.2f} {ssim_val:<10.4f} {t:<10.2f}")
         
         return metrics
-        
+
     except ImportError:
-        print("警告: 无法导入某些scikit-image去噪函数。请确保已安装最新版本的scikit-image。")
+        print(
+            "Warning: Unable to import some scikit-image denoising functions. Please ensure the latest version of scikit-image is installed.")
         return None
 
 
@@ -471,21 +476,21 @@ def main():
     # 创建结果目录
     if not os.path.exists("./results"):
         os.makedirs("./results")
-    
-    print("边缘保留图像去噪演示程序")
+
+    print("Edge-Preserving Image Denoising Demonstration")
     print("=" * 50)
-    print("请选择操作模式:")
-    print("1. 对单个图像进行去噪演示")
-    print("2. 下载Set12数据集并对其进行测试")
-    print("3. 输入自定义图像路径进行去噪")
-    print("4. 比较不同去噪方法的性能")
-    
-    choice = input("请输入选择 (1-4): ")
-    
+    print("Please select an operation mode:")
+    print("1. Denoising demonstration for a single image")
+    print("2. Download the Set12 dataset and test it")
+    print("3. Input a custom image path for denoising")
+    print("4. Compare the performance of different denoising methods")
+
+    choice = input("Please enter your choice (1-4): ")
+
     if choice == '1':
-        # 单图像去噪演示
-        print("创建测试图像...")
-        
+        # Single image denoising demonstration
+        print("Creating test image...")
+
         # 创建测试图像（有清晰边缘的图像）
         img = np.zeros((256, 256))
         x, y = np.meshgrid(np.linspace(-1, 1, 256), np.linspace(-1, 1, 256))
@@ -501,71 +506,72 @@ def main():
         img[:, 180:190] += 0.5
         
         img = np.clip(img, 0, 1)
-        
-        # 添加噪声
-        noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
+
+        # Add noise
+        noise_level = int(input("Please enter the noise level (Recommended: 15-50): ") or "25")
         noisy_img = generate_noisy_image(img, noise_level)
-        
-        # 去噪处理
-        lambda_param = 0.01 * (noise_level/15)  # 根据噪声级别自适应调整
-        print(f"正在对图像进行去噪处理 (噪声级别: {noise_level}, lambda: {lambda_param:.4f})...")
+
+        # Denoising process
+        lambda_param = 0.01 * (noise_level / 15)  # Adaptive adjustment based on noise level
+        print(f"Performing denoising on the image (Noise level: {noise_level}, lambda: {lambda_param:.4f})...")
         denoised_img = denoise_apg_edge_preserving(
-            noisy_img, 
+            noisy_img,
             lambda_param=lambda_param,
             max_iter=50
         )
-        
-        # 显示结果
+
+        # Display results
         evaluate_denoising(img, noisy_img, denoised_img)
-        display_results(img, noisy_img, denoised_img, "边缘保留去噪演示")
+        display_results(img, noisy_img, denoised_img, "Edge-Preserving Denoising Demonstration")
         compare_edge_preservation(img, noisy_img, denoised_img)
-        
+
     elif choice == '2':
-        # 下载并测试Set12数据集
-        print("下载Set12数据集...")
+        # Download and test the Set12 dataset
+        print("Downloading Set12 dataset...")
         image_paths = download_set12()
-        
+
         if len(image_paths) > 0:
-            print(f"成功下载 {len(image_paths)} 张图像")
+            print(f"Successfully downloaded {len(image_paths)} images")
             noise_levels = [15, 25, 35]
-            print(f"测试噪声级别: {noise_levels}")
-            
+            print(f"Testing noise levels: {noise_levels}")
+
             results = run_denoising_on_dataset(image_paths, noise_levels)
         else:
-            print("无法下载数据集。请检查您的互联网连接，或尝试其他选项。")
-        
+            print("Failed to download the dataset. Please check your internet connection or try another option.")
+
+
     elif choice == '3':
         # 使用自定义图像
-        image_path = input("请输入图像文件路径: ")
-        
+        image_path = input("Please enter the image file path: ")
+
         try:
             img = img_as_float(io.imread(image_path, as_gray=True))
-            
+
             # 添加噪声
-            noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
+            noise_level = int(input("Please enter the noise level (Recommended: 15-50): ") or "25")
             noisy_img = generate_noisy_image(img, noise_level)
-            
+
             # 去噪处理
             lambda_param = 0.01 * (noise_level/15)  # 根据噪声级别自适应调整
-            print(f"正在对图像进行去噪处理 (噪声级别: {noise_level}, lambda: {lambda_param:.4f})...")
+            print(f"Performing denoising on the image (Noise level: {noise_level}, lambda: {lambda_param:.4f})...")
             denoised_img = denoise_apg_edge_preserving(
-                noisy_img, 
+                noisy_img,
                 lambda_param=lambda_param,
                 max_iter=50
             )
-            
+
             # 显示结果
             evaluate_denoising(img, noisy_img, denoised_img)
-            display_results(img, noisy_img, denoised_img, "自定义图像去噪结果")
+            display_results(img, noisy_img, denoised_img, "Custom Image Denoising Results")
             compare_edge_preservation(img, noisy_img, denoised_img)
-            
+
         except Exception as e:
-            print(f"错误: 无法读取或处理图像。详细信息: {e}")
-        
+            print(f"Error: Unable to read or process the image. Details: {e}")
+
     elif choice == '4':
         # 比较不同去噪方法
-        print("创建测试图像用于比较...")
-        
+        print("Creating test image for comparison...")
+
         # 创建一个包含不同特征的测试图像
         img = np.zeros((256, 256))
         x, y = np.meshgrid(np.linspace(-1, 1, 256), np.linspace(-1, 1, 256))
@@ -585,13 +591,13 @@ def main():
         
         img = np.clip(img, 0, 1)
         
-        noise_level = int(input("请输入噪声级别 (推荐15-50): ") or "25")
+        noise_level = int(input("Please enter the noise level (Recommended: 15-50): ") or "25")
         metrics = compare_with_other_denoisers(img, noise_level)
         
     else:
-        print("无效选择，请运行程序并选择1-4之间的数字。")
+        print("Invalid choice, please run the program and select a number between 1-4.")
     
-    print("\n程序完成！结果保存在 './results' 目录中。")
+    print("\nProgram complete! Results are saved in the './results' directory.")
 
 
 if __name__ == "__main__":
