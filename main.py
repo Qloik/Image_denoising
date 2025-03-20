@@ -353,7 +353,7 @@ def compare_with_other_denoisers(img, noise_level=25):
         
         print("应用小波去噪...")
         start_time = time.time()
-        wavelet_denoised = denoise_wavelet(noisy_img, multichannel=False)
+        wavelet_denoised = denoise_wavelet(noisy_img, channel_axis=None)
         wavelet_time = time.time() - start_time
         
         # 计算PSNR和SSIM
